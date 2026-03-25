@@ -27,6 +27,8 @@ class WanOfficialPipelineAdapter:
         sampling_steps=40,
         sample_shift=12.0,
         offload_model=True,
+        preferred_linalg_library='magma',
+        cusolver_fallback_solver='dpm++',
     ):
         self.runner = runner
         # Keep the same expert naming semantics as existing LLMC Wan2.2 flow:
@@ -37,6 +39,8 @@ class WanOfficialPipelineAdapter:
         self.sampling_steps = sampling_steps
         self.sample_shift = sample_shift
         self.offload_model = offload_model
+        self.preferred_linalg_library = preferred_linalg_library
+        self.cusolver_fallback_solver = cusolver_fallback_solver
         self._is_wan_official = True
 
     @staticmethod
@@ -69,6 +73,15 @@ class WanOfficialPipelineAdapter:
         # Keep the same API as diffusers pipeline; official runner manages model movement itself.
         return self
 
+    @staticmethod
+    def _is_cusolver_internal_error(exc):
+        err = str(exc)
+        return (
+            'CUSOLVER_STATUS_INTERNAL_ERROR' in err
+            or 'cusolverDnCreate' in err
+            or 'torch.linalg.solve' in err
+        )
+
     def __call__(
         self,
         prompt,
@@ -98,18 +111,75 @@ class WanOfficialPipelineAdapter:
         seed = kwargs.get('seed', -1)
         offload_model = kwargs.get('offload_model', self.offload_model)
 
-        video = self.runner.generate(
-            input_prompt=prompt,
-            size=(width, height),
-            frame_num=num_frames,
-            shift=sample_shift,
-            sample_solver=sample_solver,
-            sampling_steps=sampling_steps,
-            guide_scale=(guide_scale_low, guide_scale_high),
-            n_prompt=negative_prompt if negative_prompt is not None else '',
-            seed=seed,
-            offload_model=offload_model,
-        )
+        def _run_generate(cur_solver):
+            return self.runner.generate(
+                input_prompt=prompt,
+                size=(width, height),
+                frame_num=num_frames,
+                shift=sample_shift,
+                sample_solver=cur_solver,
+                sampling_steps=sampling_steps,
+                guide_scale=(guide_scale_low, guide_scale_high),
+                n_prompt=negative_prompt if negative_prompt is not None else '',
+                seed=seed,
+                offload_model=offload_model,
+            )
+
+        try:
+            video = _run_generate(sample_solver)
+        except RuntimeError as first_err:
+            if not self._is_cusolver_internal_error(first_err):
+                raise
+
+            logger.warning(
+                f'Detected CuSolver internal error under solver={sample_solver}. '
+                'Trying fallback strategies for Wan2.2 official backend.'
+            )
+            last_err = first_err
+            video = None
+
+            preferred_linalg = kwargs.get(
+                'preferred_linalg_library', self.preferred_linalg_library
+            )
+            if preferred_linalg:
+                preferred_linalg_fn = getattr(
+                    getattr(torch.backends, 'cuda', None), 'preferred_linalg_library', None
+                )
+                if callable(preferred_linalg_fn):
+                    try:
+                        preferred_linalg_fn(preferred_linalg)
+                        logger.warning(
+                            f'Set torch.backends.cuda.preferred_linalg_library({preferred_linalg!r}) '
+                            f'and retrying solver={sample_solver}.'
+                        )
+                        video = _run_generate(sample_solver)
+                    except Exception as retry_err:
+                        last_err = retry_err
+                        logger.warning(
+                            f'Retry with preferred_linalg_library={preferred_linalg!r} failed: {retry_err}'
+                        )
+
+            fallback_solver = kwargs.get(
+                'cusolver_fallback_solver', self.cusolver_fallback_solver
+            )
+            if video is None and fallback_solver and fallback_solver != sample_solver:
+                try:
+                    logger.warning(
+                        f'Retrying Wan2.2 generation with fallback sample_solver={fallback_solver} '
+                        f'(original={sample_solver}).'
+                    )
+                    video = _run_generate(fallback_solver)
+                except Exception as fallback_err:
+                    last_err = fallback_err
+
+            if video is None:
+                raise RuntimeError(
+                    'Wan2.2 generation failed after CuSolver fallback attempts. '
+                    f'original_solver={sample_solver}, '
+                    f'preferred_linalg_library={preferred_linalg}, '
+                    f'fallback_solver={fallback_solver}'
+                ) from last_err
+
         return SimpleNamespace(frames=[self._tensor_to_frames(video)])
 
 
@@ -251,6 +321,12 @@ class Wan2T2V(BaseModel):
                 'sample_shift', getattr(wan_config, 'sample_shift', 12.0)
             ),
             offload_model=self.config.model.get('offload_model', True),
+            preferred_linalg_library=self.config.model.get(
+                'preferred_linalg_library', 'magma'
+            ),
+            cusolver_fallback_solver=self.config.model.get(
+                'cusolver_fallback_solver', 'dpm++'
+            ),
         )
         self.pipeline_model_path = normalized_model_path
         self.pipeline_source = 'wan_official'
