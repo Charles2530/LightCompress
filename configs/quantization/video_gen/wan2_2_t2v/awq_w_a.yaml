@@ -8,6 +8,8 @@ model:
     # 默认严格走官方 Wan2.2 原生后端；官方代码不可用时会直接报错，不再静默回退到 Diffusers。
     # 若确实需要回退可开启：
     # allow_diffusers_fallback: True
+    # 为避免部分环境下 unipc/cusolver 的后端报错，默认使用 dpm++ 更稳定。
+    sample_solver: dpm++
     torch_dtype: auto
     # 显存不足时开启：校准阶段捕获的激活存到 CPU，量化时再按 block 搬到 GPU
     use_cpu_to_save_cuda_mem_for_catcher: True

@@ -27,7 +27,7 @@ class WanOfficialPipelineAdapter:
         sampling_steps=40,
         sample_shift=12.0,
         offload_model=True,
-        preferred_linalg_library='magma',
+        preferred_linalg_library=None,
         cusolver_fallback_solver='dpm++',
     ):
         self.runner = runner
@@ -74,12 +74,14 @@ class WanOfficialPipelineAdapter:
         return self
 
     @staticmethod
-    def _is_cusolver_internal_error(exc):
+    def _is_solver_backend_error(exc):
         err = str(exc)
         return (
             'CUSOLVER_STATUS_INTERNAL_ERROR' in err
             or 'cusolverDnCreate' in err
             or 'torch.linalg.solve' in err
+            or 'CUBLAS error' in err
+            or 'magma_' in err
         )
 
     def __call__(
@@ -128,11 +130,11 @@ class WanOfficialPipelineAdapter:
         try:
             video = _run_generate(sample_solver)
         except RuntimeError as first_err:
-            if not self._is_cusolver_internal_error(first_err):
+            if not self._is_solver_backend_error(first_err):
                 raise
 
             logger.warning(
-                f'Detected CuSolver internal error under solver={sample_solver}. '
+                f'Detected linear-solver backend error under solver={sample_solver}. '
                 'Trying fallback strategies for Wan2.2 official backend.'
             )
             last_err = first_err
@@ -322,7 +324,7 @@ class Wan2T2V(BaseModel):
             ),
             offload_model=self.config.model.get('offload_model', True),
             preferred_linalg_library=self.config.model.get(
-                'preferred_linalg_library', 'magma'
+                'preferred_linalg_library', None
             ),
             cusolver_fallback_solver=self.config.model.get(
                 'cusolver_fallback_solver', 'dpm++'
