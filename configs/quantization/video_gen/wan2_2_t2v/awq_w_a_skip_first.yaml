@@ -9,7 +9,7 @@ model:
 calib:
     name: t2v
     download: False
-    path: ./assets/wan_t2v/calib/
+    path: ./datasets/OpenS2V-5M-calib/
     sample_steps: 20   # OOM 时可减小，如 8 或 10
     bs: 1
     target_height: 480 # OOM 时可减小，如 320
