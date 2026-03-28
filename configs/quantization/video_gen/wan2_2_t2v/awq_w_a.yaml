@@ -13,7 +13,7 @@ calib:
     sample_steps: 20   # OOM 时可减小，如 8 或 10
     bs: 1
     target_height: 480 # OOM 时可减小，如 320
-    target_width: 832  # OOM 时可减小，如 576
+    target_width: 848  # OOM 时可减小，如 576
     num_frames: 81    # OOM 时可减小，如 49 或 33
     guidance_scale: 4.0
     guidance_scale_2: 3.0
@@ -23,10 +23,10 @@ eval:
     type: video_gen
     name: t2v
     download: False
-    path: ./datasets/OpenS2V-5M-calib/
+    path: ./datasets/OpenS2V-5M/
     bs: 1
     target_height: 480
-    target_width: 832
+    target_width: 848
     num_frames: 81
     guidance_scale: 4.0
     guidance_scale_2: 3.0
