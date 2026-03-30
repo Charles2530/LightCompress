@@ -1102,6 +1102,12 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
                     os.path.join(path, 'transformer_2')
                 )
                 logger.info('save Wan2.2 transformer_2 done --')
+            # For fake-quant export, additionally persist the whole runtime pipeline
+            # (including replaced fake-quant modules) with torch.save.
+            if os.path.basename(os.path.normpath(path)) == 'fake_quant_model':
+                full_model_path = os.path.join(path, 'wan2_2_fake_quant_pipeline.pt')
+                torch.save(self.model.Pipeline, full_model_path)
+                logger.info(f'save Wan2.2 full fake-quant pipeline done -- {full_model_path}')
         else:
             self.model.get_model().save_pretrained(path)
             logger.info('save model done --')
