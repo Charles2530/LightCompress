@@ -259,8 +259,8 @@ if __name__ == '__main__':
     dist.barrier()
 
     main(config)
-
-    destroy_process_group()
+    if dist.is_initialized():
+        destroy_process_group()
 
     llmc_end_time = time.time()
     llmc_duration_time = llmc_end_time - llmc_start_time

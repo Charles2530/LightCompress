@@ -1,6 +1,7 @@
 import gc
 import os
 import sys
+from functools import partial
 
 import torch
 from loguru import logger
@@ -15,6 +16,26 @@ except Exception:
         'Please install qtorch (pip install qtorch).'
     )
     float_quantize = None
+
+
+def _ste_round(x):
+    return (x.round() - x).detach() + x
+
+
+def _round_floor_with_offset(x, offset):
+    return torch.floor(x) + offset
+
+
+def _shrink_lp1_fixed_beta(x, beta, fixed_beta):
+    del beta
+    return torch.sign(x) * torch.nn.functional.relu(torch.abs(x) - 1.0 / fixed_beta)
+
+
+def _shrink_lp_fixed_beta(x, beta, fixed_beta, p):
+    del beta
+    return torch.sign(x) * torch.nn.functional.relu(
+        torch.abs(x) - (1.0 / fixed_beta) * torch.pow(torch.abs(x), p - 1)
+    )
 
 
 def weight_cast_to_bf16(weight, scale, block_size):
@@ -63,7 +84,7 @@ class BaseQuantizer(object):
             self.block_size = self.kwargs['block_size']
 
         if self.kwargs.get('ste', False):
-            self.round_func = lambda x: (x.round() - x).detach() + x
+            self.round_func = _ste_round
         else:
             self.round_func = torch.round
         if 'ste_all' in self.kwargs and self.kwargs['ste_all']:
@@ -92,14 +113,10 @@ class BaseQuantizer(object):
         self.kappa = self.kwargs.get('kappa', 1.01)
         self.iters = self.kwargs.get('iters', 20)
         if self.lp_norm == 1:
-            self.shrink_op = lambda x, beta: torch.sign(x) * torch.nn.functional.relu(
-                torch.abs(x) - 1.0 / self.beta
-            )
+            self.shrink_op = partial(_shrink_lp1_fixed_beta, fixed_beta=self.beta)
         else:
-            self.shrink_op = lambda x, beta, p=self.lp_norm: torch.sign(
-                x
-            ) * torch.nn.functional.relu(
-                torch.abs(x) - (1.0 / self.beta) * torch.pow(torch.abs(x), p - 1)
+            self.shrink_op = partial(
+                _shrink_lp_fixed_beta, fixed_beta=self.beta, p=self.lp_norm
             )
 
     def reshape_batch_tensors(self, act_tensors):
@@ -796,41 +813,45 @@ class IntegerQuantizer(BaseQuantizer):
         else:
             q_weight = weight
 
+        org_round_func = None
         if 'rounding' in args:
             org_round_func = self.round_func
-            self.round_func = lambda x: torch.floor(x) + args['rounding']
+            self.round_func = partial(
+                _round_floor_with_offset, offset=args['rounding']
+            )
 
-        org_w_shape = q_weight.shape
-        org_w_dtype = q_weight.dtype
-        scales, zeros, qmax, qmin = (
-            args['scales'],
-            args['zeros'],
-            args['qmax'],
-            args['qmin'],
-        )
-        output_scale_factor = (
-            args['output_scale_factor'] if 'output_scale_factor' in args else 1
-        )
+        try:
+            org_w_shape = q_weight.shape
+            org_w_dtype = q_weight.dtype
+            scales, zeros, qmax, qmin = (
+                args['scales'],
+                args['zeros'],
+                args['qmax'],
+                args['qmin'],
+            )
+            output_scale_factor = (
+                args['output_scale_factor'] if 'output_scale_factor' in args else 1
+            )
 
-        q_weight = self.reshape_tensor(q_weight)
-        q_weight = self.quant_dequant(
-            q_weight, scales, zeros, qmax, qmin, output_scale_factor
-        )
-        q_weight = self.restore_tensor(q_weight, org_w_shape).to(org_w_dtype)
+            q_weight = self.reshape_tensor(q_weight)
+            q_weight = self.quant_dequant(
+                q_weight, scales, zeros, qmax, qmin, output_scale_factor
+            )
+            q_weight = self.restore_tensor(q_weight, org_w_shape).to(org_w_dtype)
 
-        if 'int_indices' in args:
-            mix_weight = torch.zeros_like(weight)
-            mix_weight[:, args['int_indices']] = q_weight
-            mix_weight[:, args['fp_indices']] = fp_weight
-            return mix_weight
+            if 'int_indices' in args:
+                mix_weight = torch.zeros_like(weight)
+                mix_weight[:, args['int_indices']] = q_weight
+                mix_weight[:, args['fp_indices']] = fp_weight
+                return mix_weight
 
-        elif 'dim' in args and 'ic' in args['dim']:
-            q_weight = q_weight.T
+            elif 'dim' in args and 'ic' in args['dim']:
+                q_weight = q_weight.T
 
-        if 'rounding' in args:
-            self.round_func = org_round_func
-
-        return q_weight
+            return q_weight
+        finally:
+            if org_round_func is not None:
+                self.round_func = org_round_func
 
     def fake_quant_weight_dynamic(self, weight, args={}):
         if 'int_indices' in args:
@@ -1117,29 +1138,33 @@ class FloatQuantizer(BaseQuantizer):
         else:
             q_weight = weight
 
+        org_round_func = None
         if 'rounding' in args:
             org_round_func = self.round_func
-            self.round_func = lambda x: torch.floor(x) + args['rounding']
+            self.round_func = partial(
+                _round_floor_with_offset, offset=args['rounding']
+            )
 
-        org_w_shape = q_weight.shape
-        org_w_dtype = q_weight.dtype
-        scales, zeros, qmax, qmin = (
-            args['scales'],
-            args['zeros'],
-            args['qmax'],
-            args['qmin'],
-        )
-        q_weight = self.reshape_tensor(q_weight)
-        q_weight = self.quant_dequant(q_weight, scales, zeros, qmax, qmin)
-        q_weight = self.restore_tensor(q_weight, org_w_shape).to(org_w_dtype)
+        try:
+            org_w_shape = q_weight.shape
+            org_w_dtype = q_weight.dtype
+            scales, zeros, qmax, qmin = (
+                args['scales'],
+                args['zeros'],
+                args['qmax'],
+                args['qmin'],
+            )
+            q_weight = self.reshape_tensor(q_weight)
+            q_weight = self.quant_dequant(q_weight, scales, zeros, qmax, qmin)
+            q_weight = self.restore_tensor(q_weight, org_w_shape).to(org_w_dtype)
 
-        if 'dim' in args and 'ic' in args['dim']:
-            q_weight = q_weight.T
+            if 'dim' in args and 'ic' in args['dim']:
+                q_weight = q_weight.T
 
-        if 'rounding' in args:
-            self.round_func = org_round_func
-
-        return q_weight
+            return q_weight
+        finally:
+            if org_round_func is not None:
+                self.round_func = org_round_func
 
     def fake_quant_weight_dynamic(self, weight, args={}):
 

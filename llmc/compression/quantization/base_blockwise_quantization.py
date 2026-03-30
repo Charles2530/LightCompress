@@ -44,6 +44,18 @@ from .quant import (
 )
 
 
+def _apply_a_qdq(act, module, aquantizer, act_static=False, input_index=0):
+    if act_static:
+        args = {
+            'scales': (getattr(module, f'buf_act_scales_{input_index}', None)),
+            'zeros': (getattr(module, f'buf_act_zeros_{input_index}', None)),
+            'qmax': (getattr(module, f'buf_act_qmax_{input_index}', None)),
+            'qmin': (getattr(module, f'buf_act_qmin_{input_index}', None)),
+        }
+        return aquantizer.fake_quant_act_static(act, args)
+    return aquantizer.fake_quant_act_dynamic(act)
+
+
 class BaseBlockwiseQuantization(BlockwiseOpt):
     def __init__(self, model, quant_config, input, padding_mask, config):
         super().__init__(model, quant_config, input, padding_mask, config)
@@ -76,22 +88,23 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
         return wquantizer.real_quant_weight_dynamic(module.weight.data)
 
     def a_qdq(self, act, module, aquantizer, input_index=0):
-        if self.act_static:
-            args = {
-                'scales': (getattr(module, f'buf_act_scales_{input_index}', None)),
-                'zeros': (getattr(module, f'buf_act_zeros_{input_index}', None)),
-                'qmax': (getattr(module, f'buf_act_qmax_{input_index}', None)),
-                'qmin': (getattr(module, f'buf_act_qmin_{input_index}', None)),
-            }
-            return aquantizer.fake_quant_act_static(act, args)
-        else:
-            return aquantizer.fake_quant_act_dynamic(act)
+        return _apply_a_qdq(
+            act,
+            module,
+            aquantizer=aquantizer,
+            act_static=self.act_static,
+            input_index=input_index,
+        )
 
     def get_replacement_params(self, mode='fake_quant', w_only=False, name=None):
         params_dict = {}
         if mode in ['fake_quant', 'fake_quant_wo_kv']:
             params_dict['a_qdq'] = (
-                partial(self.a_qdq, aquantizer=self.aquantizer)
+                partial(
+                    _apply_a_qdq,
+                    aquantizer=self.aquantizer,
+                    act_static=self.act_static,
+                )
                 if not w_only
                 else None
             )
@@ -119,20 +132,36 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
         elif mode == 'quant_attn':
             params_dict = {
                 'matmul_a1_qdq': partial(
-                    self.a_qdq, aquantizer=self.aquantizer, input_index=0
+                    _apply_a_qdq,
+                    aquantizer=self.aquantizer,
+                    act_static=self.act_static,
+                    input_index=0,
                 ),
                 'matmul_a2_qdq': partial(
-                    self.a_qdq, aquantizer=self.aquantizer, input_index=1
+                    _apply_a_qdq,
+                    aquantizer=self.aquantizer,
+                    act_static=self.act_static,
+                    input_index=1,
                 ),
                 'softmax_a_qdq': (
-                    partial(self.a_qdq, aquantizer=self.aquantizer)
+                    partial(
+                        _apply_a_qdq,
+                        aquantizer=self.aquantizer,
+                        act_static=self.act_static,
+                    )
                     if self.quant_softmax
                     else None
                 ),
             }
 
         elif mode == 'quant_act_fn':
-            params_dict = {'a_qdq': partial(self.a_qdq, aquantizer=self.aquantizer)}
+            params_dict = {
+                'a_qdq': partial(
+                    _apply_a_qdq,
+                    aquantizer=self.aquantizer,
+                    act_static=self.act_static,
+                )
+            }
 
         return params_dict
 
