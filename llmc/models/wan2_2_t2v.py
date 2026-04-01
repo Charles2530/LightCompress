@@ -225,6 +225,12 @@ class Wan2T2V(BaseModel):
             self.Pipeline.transformer_2.blocks[0] = Catcher(first_block_2, 'transformer_2')
 
         self.Pipeline.to('cuda')
+        # Calibration only needs hidden states from transformer blocks.
+        # Keep VAE on CPU and request latent output to avoid costly VAE decode OOM.
+        if hasattr(self.Pipeline, 'vae') and self.Pipeline.vae is not None:
+            self.Pipeline.vae.to('cpu')
+            gc.collect()
+            torch.cuda.empty_cache()
         for data in calib_data:
             try:
                 pipe_kw = {
@@ -234,6 +240,7 @@ class Wan2T2V(BaseModel):
                     'width': self.target_width,
                     'num_frames': self.num_frames,
                     'guidance_scale': self.guidance_scale,
+                    'output_type': 'latent',
                 }
                 if hasattr(self, 'guidance_scale_2'):
                     pipe_kw['guidance_scale_2'] = self.guidance_scale_2
