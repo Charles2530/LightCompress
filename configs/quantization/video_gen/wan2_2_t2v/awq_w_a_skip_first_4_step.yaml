@@ -55,4 +55,4 @@ save:
     # save_lightx2v: True
     # save_path: ./save_for_lightx2v/wan2_2_t2v/awq_w_a/skip_first/
     save_fake: True
-    save_path: ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_4_step/
+    save_path: ./save_for_fake/wan2_2_t2v/awq_w_a/skip_first_4_step/
