@@ -83,20 +83,46 @@ class Wan2T2V(BaseModel):
                 f'lora_adapter_weights must contain 2 values, but got {self.lora_adapter_weights}.'
             )
 
+        # Guard against CUDA OOM while loading LoRA:
+        # keep experts on CPU and clear stale CUDA cache before adapter injection.
+        if hasattr(self.Pipeline, 'transformer') and self.Pipeline.transformer is not None:
+            self.Pipeline.transformer.to('cpu')
+        if hasattr(self.Pipeline, 'transformer_2') and self.Pipeline.transformer_2 is not None:
+            self.Pipeline.transformer_2.to('cpu')
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         logger.info('Loading Wan2.2 Lightning LoRA adapters...')
         try:
-            self.Pipeline.load_lora_weights(
-                self.high_noise_lora_path,
-                adapter_name='high_noise',
-            )
-            self.Pipeline.load_lora_weights(
-                self.low_noise_lora_path,
-                adapter_name='low_noise',
-            )
+            try:
+                self.Pipeline.load_lora_weights(
+                    self.high_noise_lora_path,
+                    adapter_name='high_noise',
+                    low_cpu_mem_usage=True,
+                )
+                self.Pipeline.load_lora_weights(
+                    self.low_noise_lora_path,
+                    adapter_name='low_noise',
+                    low_cpu_mem_usage=True,
+                )
+            except TypeError:
+                # Fallback for older diffusers versions without low_cpu_mem_usage.
+                self.Pipeline.load_lora_weights(
+                    self.high_noise_lora_path,
+                    adapter_name='high_noise',
+                )
+                self.Pipeline.load_lora_weights(
+                    self.low_noise_lora_path,
+                    adapter_name='low_noise',
+                )
             self.Pipeline.set_adapters(
                 ['high_noise', 'low_noise'],
                 adapter_weights=self.lora_adapter_weights,
             )
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except Exception as exc:
             raise RuntimeError(
                 'Failed to load Wan2.2 Lightning LoRA adapters. '
