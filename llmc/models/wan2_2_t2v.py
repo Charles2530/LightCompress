@@ -18,6 +18,9 @@ class Wan2T2V(BaseModel):
     """Wan2.2-T2V with MoE: two experts (high-noise + low-noise), same block structure as Wan2.1."""
 
     def __init__(self, config, device_map=None, use_cache=False):
+        self.high_noise_lora_path = config.model.get('high_noise_lora_path', None)
+        self.low_noise_lora_path = config.model.get('low_noise_lora_path', None)
+        self.lora_adapter_weights = config.model.get('lora_adapter_weights', [1.0, 1.0])
         super().__init__(config, device_map, use_cache)
         if 'calib' in config:
             self.calib_bs = config.calib.bs
@@ -27,8 +30,10 @@ class Wan2T2V(BaseModel):
             self.num_frames = config.calib.get('num_frames', 81)
             self.guidance_scale = config.calib.get('guidance_scale', 5.0)
             self.guidance_scale_2 = config.calib.get('guidance_scale_2', 3.0)
+            self.num_inference_steps = config.calib.get('num_inference_steps', None)
         else:
             self.sample_steps = None
+            self.num_inference_steps = None
 
     def build_model(self):
         vae = AutoencoderKLWan.from_pretrained(
@@ -45,6 +50,7 @@ class Wan2T2V(BaseModel):
             torch_dtype=torch.bfloat16,
             use_safetensors=True,
         )
+        self.load_lora_weights_for_lightning()
         self.find_llmc_model()
         # Wrap both experts with LlmcWanTransformerBlock (same as Wan2.1 per-block layout).
         for block_idx, block in enumerate(self.Pipeline.transformer.blocks):
@@ -64,6 +70,38 @@ class Wan2T2V(BaseModel):
             self.num_transformer_blocks = len(self.blocks)
             logger.info('Wan2.2: single transformer wrapped (40 blocks).')
         logger.info('Model: %s', self.model)
+
+    def load_lora_weights_for_lightning(self):
+        if self.high_noise_lora_path is None and self.low_noise_lora_path is None:
+            return
+        if self.high_noise_lora_path is None or self.low_noise_lora_path is None:
+            raise ValueError(
+                'Both high_noise_lora_path and low_noise_lora_path must be set for Wan2.2 Lightning LoRA.'
+            )
+        if len(self.lora_adapter_weights) != 2:
+            raise ValueError(
+                f'lora_adapter_weights must contain 2 values, but got {self.lora_adapter_weights}.'
+            )
+
+        logger.info('Loading Wan2.2 Lightning LoRA adapters...')
+        try:
+            self.Pipeline.load_lora_weights(
+                self.high_noise_lora_path,
+                adapter_name='high_noise',
+            )
+            self.Pipeline.load_lora_weights(
+                self.low_noise_lora_path,
+                adapter_name='low_noise',
+            )
+            self.Pipeline.set_adapters(
+                ['high_noise', 'low_noise'],
+                adapter_weights=self.lora_adapter_weights,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                'Failed to load Wan2.2 Lightning LoRA adapters. '
+                'Please verify LoRA files and diffusers compatibility.'
+            ) from exc
 
     def find_llmc_model(self):
         self.model = self.Pipeline.transformer
@@ -173,6 +211,8 @@ class Wan2T2V(BaseModel):
                 }
                 if hasattr(self, 'guidance_scale_2'):
                     pipe_kw['guidance_scale_2'] = self.guidance_scale_2
+                if self.num_inference_steps is not None:
+                    pipe_kw['num_inference_steps'] = self.num_inference_steps
                 self.Pipeline(**pipe_kw)
             except ValueError:
                 pass

@@ -24,6 +24,7 @@ class VideoGenerateEval(BaseEval):
         self.num_frames = self.eval_cfg.get('num_frames', 81)
         self.guidance_scale = self.eval_cfg.get('guidance_scale', 5.0)
         self.guidance_scale_2 = self.eval_cfg.get('guidance_scale_2', None)
+        self.num_inference_steps = self.eval_cfg.get('num_inference_steps', None)
         self.fps = self.eval_cfg.get('fps', 15)
 
     @torch.no_grad()
@@ -67,6 +68,8 @@ class VideoGenerateEval(BaseEval):
             }
             if self.guidance_scale_2 is not None:
                 pipe_kw['guidance_scale_2'] = self.guidance_scale_2
+            if self.num_inference_steps is not None:
+                pipe_kw['num_inference_steps'] = self.num_inference_steps
             output = model.Pipeline(**pipe_kw).frames[0]
             export_to_video(
                 output,
@@ -92,6 +95,8 @@ class VideoGenerateEval(BaseEval):
             }
             if self.guidance_scale_2 is not None:
                 pipe_kw['guidance_scale_2'] = self.guidance_scale_2
+            if self.num_inference_steps is not None:
+                pipe_kw['num_inference_steps'] = self.num_inference_steps
             output = model.Pipeline(**pipe_kw).frames[0]
 
             export_to_video(
