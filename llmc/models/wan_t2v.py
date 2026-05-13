@@ -93,6 +93,7 @@ class WanT2V(BaseModel):
                     width=self.target_width,
                     num_frames=self.num_frames,
                     guidance_scale=self.guidance_scale,
+                    output_type='latent',
                 )
             except ValueError:
                 pass

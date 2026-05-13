@@ -1089,6 +1089,75 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
                     if not param.is_contiguous():
                         param.data = param.data.contiguous()
 
+    @staticmethod
+    @torch.no_grad()
+    def _torch_save_module_move_cpu_then_restore(module, out_path):
+        """Pickle a full nn.Module; move to CPU for portability, then restore device."""
+        try:
+            p0 = next(module.parameters())
+            dev = p0.device
+        except StopIteration:
+            dev = torch.device('cpu')
+        module.cpu()
+        torch.save(module, out_path, pickle_protocol=4)
+        module.to(dev)
+
+    @staticmethod
+    @torch.no_grad()
+    def _torch_save_state_dict_move_cpu_then_restore(module, out_path):
+        """Save module.state_dict() on CPU without permanently changing module device."""
+        try:
+            p0 = next(module.parameters())
+            dev = p0.device
+        except StopIteration:
+            dev = torch.device('cpu')
+        module.cpu()
+        state_dict = {k: v.cpu() for k, v in module.state_dict().items()}
+        torch.save(state_dict, out_path, pickle_protocol=4)
+        module.to(dev)
+
+    @torch.no_grad()
+    def _save_wan22_lightning_compat_experts(self, path):
+        """
+        Save MoE experts as standalone .pt files (names mirror Wan2.2-Lightning LoRA files).
+
+        Layout under ``path``::
+
+            lightning_compat/high_noise_model.pt   # Pipeline.transformer (high-noise expert)
+            lightning_compat/low_noise_model.pt    # Pipeline.transformer_2 (low-noise expert)
+            lightning_compat_state_dict/high_noise_model_state_dict.pt
+            lightning_compat_state_dict/low_noise_model_state_dict.pt
+
+        Inference: load base ``WanPipeline`` from ``model.path``, then assign
+        ``pipe.transformer = torch.load(..., map_location=..., weights_only=False)`` etc.
+        """
+        save_cfg = getattr(self.config, 'save', None)
+        if save_cfg is not None and hasattr(save_cfg, 'get'):
+            if not save_cfg.get('wan22_lightning_compat', True):
+                return
+        lc_dir = os.path.join(path, 'lightning_compat')
+        lc_sd_dir = os.path.join(path, 'lightning_compat_state_dict')
+        os.makedirs(lc_dir, exist_ok=True)
+        os.makedirs(lc_sd_dir, exist_ok=True)
+        pipe = self.model.Pipeline
+        high_path = os.path.join(lc_dir, 'high_noise_model.pt')
+        high_sd_path = os.path.join(lc_sd_dir, 'high_noise_model_state_dict.pt')
+        self._torch_save_module_move_cpu_then_restore(pipe.transformer, high_path)
+        self._torch_save_state_dict_move_cpu_then_restore(pipe.transformer, high_sd_path)
+        logger.info(f'save Wan2.2 lightning-compat high_noise_model.pt done -- {high_path}')
+        logger.info(
+            f'save Wan2.2 lightning-compat high_noise_model_state_dict.pt done -- {high_sd_path}'
+        )
+        if hasattr(pipe, 'transformer_2') and pipe.transformer_2 is not None:
+            low_path = os.path.join(lc_dir, 'low_noise_model.pt')
+            low_sd_path = os.path.join(lc_sd_dir, 'low_noise_model_state_dict.pt')
+            self._torch_save_module_move_cpu_then_restore(pipe.transformer_2, low_path)
+            self._torch_save_state_dict_move_cpu_then_restore(pipe.transformer_2, low_sd_path)
+            logger.info(f'save Wan2.2 lightning-compat low_noise_model.pt done -- {low_path}')
+            logger.info(
+                f'save Wan2.2 lightning-compat low_noise_model_state_dict.pt done -- {low_sd_path}'
+            )
+
     @torch.no_grad()
     def save_model(self, path):
         if int(os.environ['RANK']) != 0:
@@ -1118,6 +1187,14 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
                     shutil.rmtree(path)
                 shutil.copytree(src, path)
                 logger.info(f'Copied original pipeline from {src} to {path}')
+            # Save quantized base experts without LoRA adapters, so inference can
+            # load quant base first and then re-attach external Lightning LoRA.
+            if hasattr(self.model.Pipeline, 'unload_lora_weights'):
+                try:
+                    self.model.Pipeline.unload_lora_weights()
+                    logger.info('Unloaded Wan2.2 LoRA adapters before save_pretrained.')
+                except Exception as exc:
+                    logger.warning(f'Failed to unload LoRA before save_pretrained: {exc}')
             # Overwrite transformer subfolder with quantized weights.
             self.model.Pipeline.transformer.save_pretrained(
                 os.path.join(path, 'transformer')
@@ -1131,6 +1208,8 @@ class BaseBlockwiseQuantization(BlockwiseOpt):
                     os.path.join(path, 'transformer_2')
                 )
                 logger.info('save Wan2.2 transformer_2 done --')
+            # Standalone expert .pt (Lightning-style names) for drop-in replacement on a base pipe.
+            self._save_wan22_lightning_compat_experts(path)
             # For fake-quant export, additionally persist the whole runtime pipeline
             # (including replaced fake-quant modules) with torch.save.
             if os.path.basename(os.path.normpath(path)) == 'fake_quant_model':

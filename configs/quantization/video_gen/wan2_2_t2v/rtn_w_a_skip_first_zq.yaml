@@ -2,23 +2,19 @@ base:
     seed: &seed 42
 model:
     type: Wan2T2V
-    path: /mnt/lm_data_afs/wangzining/charles/lab/Wan2.2/model/Wan2.2-T2V-A14B-Diffusers
-    # Wan2.2 Lightning 4-step dual-LoRA (high-noise / low-noise experts)
-    high_noise_lora_path: /mnt/lm_data_afs/wangzining/charles/lab/Wan2.2/model/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/high_noise_model.safetensors
-    low_noise_lora_path: /mnt/lm_data_afs/wangzining/charles/lab/Wan2.2/model/Wan2.2-Lightning/Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/low_noise_model.safetensors
-    lora_adapter_weights: [1.0, 1.0]
+    path: /mnt/lm_data_afs/wangzining/charles/lab/llmc/model/Wan2.2-T2V-A14B-Diffusers
     torch_dtype: auto
+    # 显存不足时开启：校准阶段捕获的激活存到 CPU，量化时再按 block 搬到 GPU
     use_cpu_to_save_cuda_mem_for_catcher: True
 calib:
     name: t2v
     download: False
-    path: ./datasets/OpenS2V-5M-calib/
-    sample_steps: 20   # 校准采样步数（首层输入抓取次数），不是扩散去噪步数
+    path: /mnt/lm_data_afs/wangzining/charles/lab/Wan2.2/vbench/vbench/vbench-calib
+    sample_steps: 20   # OOM 时可减小，如 8 或 10
     bs: 1
     target_height: 480 # OOM 时可减小，如 320
-    target_width: 848  # OOM 时可减小，如 576
+    target_width: 832  # OOM 时可减小，如 576
     num_frames: 81    # OOM 时可减小，如 49 或 33
-    num_inference_steps: 4
     guidance_scale: 4.0
     guidance_scale_2: 3.0
     seed: *seed
@@ -49,7 +45,4 @@ save:
     # save_lightx2v: True
     # save_path: ./save_for_lightx2v/wan2_2_t2v/awq_w_a/skip_first/
     save_fake: True
-    save_path: ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_4_step/
-    # Wan2.2 MoE: also write lightning_compat/high_noise_model.pt & low_noise_model.pt
-    # (drop-in replacement on a base WanPipeline, names mirror Wan2.2-Lightning LoRA files).
-    wan22_lightning_compat: True
+    save_path: ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_vbench/

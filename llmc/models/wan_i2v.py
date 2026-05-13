@@ -80,6 +80,7 @@ class WanI2V(WanT2V):
                     width=width,
                     num_frames=self.num_frames,
                     guidance_scale=self.guidance_scale,
+                    output_type='latent',
                 )
             except ValueError:
                 pass

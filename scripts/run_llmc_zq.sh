@@ -10,14 +10,15 @@ cd /mnt/lm_data_afs/wangzining/charles/lab/llmc
 
 # model_name=wan_t2v
 model_name=wan2_2_t2v
-task_name=rtn_w_a_skip_first_4_step
+task_name=rtn_w_a_skip_first_zq
 # task_name=awq_w_a_s
 log_name=${model_name}_${task_name}
-rm -rf ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_4_step/
+rm -rf ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_vbench/
+#rm -rf ./save_for_fake/wan2_2_t2v/rtn_w_a/skip_first_4_step/
 
 llmc=.
 export PYTHONPATH=$llmc:$PYTHONPATH
-config=${llmc}/configs/quantization/video_gen/${model_name}/${task_name}.yaml
+config= /mnt/lm_data_afs/wangzining/charles/lab/llmc/configs/quantization/video_gen/wan2_2_t2v/rtn_w_a_skip_first_zq.yaml
 nnodes=1
 nproc_per_node=1
 
@@ -41,4 +42,4 @@ torchrun \
 --rdzv_id $task_id \
 --rdzv_backend c10d \
 --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
-${llmc}/llmc/__main__.py --config $config --task_id $task_id |tee ${log_name}.log 
+${llmc}/llmc/__main__.py --config configs/quantization/video_gen/wan2_2_t2v/rtn_w_a_skip_first_zq.yaml --task_id $task_id |tee ${log_name}.log 

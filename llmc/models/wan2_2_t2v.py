@@ -26,9 +26,9 @@ class Wan2T2V(BaseModel):
             self.calib_bs = config.calib.bs
             self.sample_steps = config.calib.sample_steps
             self.target_height = config.calib.get('target_height', 480)
-            self.target_width = config.calib.get('target_width', 832)
+            self.target_width = config.calib.get('target_width', 848)
             self.num_frames = config.calib.get('num_frames', 81)
-            self.guidance_scale = config.calib.get('guidance_scale', 5.0)
+            self.guidance_scale = config.calib.get('guidance_scale', 4.0)
             self.guidance_scale_2 = config.calib.get('guidance_scale_2', 3.0)
             self.num_inference_steps = config.calib.get('num_inference_steps', None)
         else:
@@ -227,10 +227,6 @@ class Wan2T2V(BaseModel):
         self.Pipeline.to('cuda')
         # Calibration only needs hidden states from transformer blocks.
         # Keep VAE on CPU and request latent output to avoid costly VAE decode OOM.
-        if hasattr(self.Pipeline, 'vae') and self.Pipeline.vae is not None:
-            self.Pipeline.vae.to('cpu')
-            gc.collect()
-            torch.cuda.empty_cache()
         for data in calib_data:
             try:
                 pipe_kw = {
@@ -240,12 +236,16 @@ class Wan2T2V(BaseModel):
                     'width': self.target_width,
                     'num_frames': self.num_frames,
                     'guidance_scale': self.guidance_scale,
-                    'output_type': 'latent',
                 }
                 if hasattr(self, 'guidance_scale_2'):
                     pipe_kw['guidance_scale_2'] = self.guidance_scale_2
                 if self.num_inference_steps is not None:
                     pipe_kw['num_inference_steps'] = self.num_inference_steps
+                # Skip VAE decode: calibration only needs block-0 activations; decoding 81-frame
+                # latents spikes memory and can OOM (diffusers WanPipeline uses vae.decode when
+                # output_type is not "latent").
+                pipe_kw['output_type'] = 'latent'
+                # self.Pipeline.enable_sequential_cpu_offload(device)
                 self.Pipeline(**pipe_kw)
             except ValueError:
                 pass
